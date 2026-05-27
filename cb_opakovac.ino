@@ -2,6 +2,7 @@
 #include <EEPROM.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include <string.h>
 
 #define ISD_SS 10
 #define ISD2_SS 9
@@ -90,6 +91,7 @@ const uint16_t EEPROM_BATTERY_CONST_ADDR = 0;
 const uint16_t EEPROM_REPEATER_STATE_ADDR = EEPROM_BATTERY_CONST_ADDR + sizeof(float);
 const uint16_t EEPROM_ROGER_TONE_ADDR = EEPROM_REPEATER_STATE_ADDR + sizeof(uint8_t);
 const uint16_t EEPROM_AUTO_STATUS_INTERVAL_ADDR = EEPROM_ROGER_TONE_ADDR + sizeof(uint8_t);
+const uint16_t EEPROM_RELATION_COUNTER_ADDR = EEPROM_AUTO_STATUS_INTERVAL_ADDR + sizeof(uint32_t);
 const uint8_t EEPROM_REPEATER_ON = 0xA5;
 const uint8_t EEPROM_REPEATER_OFF = 0x5A;
 
@@ -197,6 +199,8 @@ void loadRepeaterState();
 void loadRogerTone();
 void loadAutoStatusReportInterval();
 void saveAutoStatusReportInterval(uint32_t intervalMs);
+void loadRelationCounter();
+void saveRelationCounter();
 void updateMeasurements();
 void playStartupRogerTones();
 void initISD();
@@ -278,6 +282,7 @@ void setup() {
   loadRepeaterState();
   loadRogerTone();
   loadAutoStatusReportInterval();
+  loadRelationCounter();
   updateMeasurements();
   playStartupRogerTones();
 
@@ -320,6 +325,19 @@ void saveAutoStatusReportInterval(uint32_t intervalMs) {
   EEPROM.put(EEPROM_AUTO_STATUS_INTERVAL_ADDR, intervalMs);
 }
 
+
+
+void loadRelationCounter() {
+  EEPROM.get(EEPROM_RELATION_COUNTER_ADDR, relationCounter);
+  if (relationCounter > RELATIONS_FOR_KRASNY_DEN) {
+    relationCounter = 0;
+    saveRelationCounter();
+  }
+}
+
+void saveRelationCounter() {
+  EEPROM.put(EEPROM_RELATION_COUNTER_ADDR, relationCounter);
+}
 void markRepeaterActivity() { lastRepeaterActivityMs = millis(); }
 
 void setAutoStatusReportInterval(uint32_t intervalMs) {
@@ -362,6 +380,8 @@ void checkKrasnyDenReport() {
   markRepeaterActivity();
   krasnyDenPending = false;
   nextKrasnyDenMs = 0;
+  relationCounter = 0;
+  saveRelationCounter();
 }
 
 // --- skratene: ostatna logika povodna, bez zmen ---
@@ -380,15 +400,44 @@ void updateBatteryState(){ lastBatteryVoltage=readBatteryVoltage(); lowBatteryRo
 void updateMeasurements(){ updateBatteryState(); lastTemperatureC=readTemperatureC(); }
 void initISD(){}
 void playStartupRogerTones(){}
-bool checkDtmfCommand(bool duringRecording){ (void)duringRecording; return false; }
+bool checkDtmfCommand(bool duringRecording){
+  char code[DTMF_CODE_LEN + 1];
+  if (!readDtmfCode(code, duringRecording)) return false;
+
+  if (strcmp(code, DTMF_CODE_AUTO_STATUS_OFF) == 0) {
+    setAutoStatusReportInterval(0);
+    return true;
+  }
+  if (strcmp(code, DTMF_CODE_AUTO_STATUS_1H) == 0) {
+    setAutoStatusReportInterval(3600000UL);
+    return true;
+  }
+  if (strcmp(code, DTMF_CODE_AUTO_STATUS_4H) == 0) {
+    setAutoStatusReportInterval(14400000UL);
+    return true;
+  }
+  if (strcmp(code, DTMF_CODE_AUTO_STATUS_12H) == 0) {
+    setAutoStatusReportInterval(43200000UL);
+    return true;
+  }
+  if (strcmp(code, DTMF_CODE_AUTO_STATUS_24H) == 0) {
+    setAutoStatusReportInterval(86400000UL);
+    return true;
+  }
+  if (strcmp(code, DTMF_CODE_STATUS_REPORT) == 0) {
+    playStatusReport();
+    return true;
+  }
+  return false;
+}
 void checkSqlStart(){}
 void checkSqlStop(){}
 void startRecord(){}
 void stopRecord(bool maxReached){ (void)maxReached; }
 void repeaterPlaybackCycle(){
   relationCounter++;
+  saveRelationCounter();
   if (relationCounter >= RELATIONS_FOR_KRASNY_DEN) {
-    relationCounter = 0;
     krasnyDenPending = true;
     nextKrasnyDenMs = millis() + KRASNY_DEN_DELAY_MS;
     Serial.println(F("NAPLANOVANE: PRAJEM KRASNY DEN"));
